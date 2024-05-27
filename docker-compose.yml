@@ -1,0 +1,169 @@
+version: "3.7"
+
+services:
+    # image project
+    t_app:
+        container_name: application
+        build:
+            context: .
+            args:
+                USER: ${SYS_USER}
+                UID: ${SYS_UID}
+                GID: ${SYS_UID}
+            dockerfile: Dockerfile
+        image: laravel-app
+        restart: unless-stopped
+        environment:
+            DB_CONNECTION: ${DB_CONNECTION}
+            DB_HOST: ${DB_HOST}
+            DB_DATABASE: ${DB_DATABASE}
+            DB_USERNAME: ${DB_USERNAME}
+            DB_PASSWORD: ${DB_PASSWORD}
+        working_dir: /var/www/
+        logging:
+            driver: "json-file"
+            options:
+                max-size: "10m"
+                max-file: "3"
+        volumes:
+            - ./:/var/www
+            - ./docker/php/${INI_FILE}:/usr/local/etc/php/conf.d/local.ini
+        depends_on: 
+            - t_redis
+        networks: 
+            - t_laravel
+    
+    # nginx
+    t_nginx:
+        container_name: t_nginx
+        image: nginx:alpine
+        restart: unless-stopped
+        ports: 
+            - "80:80"
+            - "443:443"
+        logging:
+            driver: "json-file"
+            options:
+                max-size: "10m"
+                max-file: "3"
+        volumes: 
+            - ./:/var/www
+            - ./docker/nginx/${NGINX_CONF_FILE}:/etc/nginx/conf.d/default.conf
+            - ./data/certbot/conf:/etc/letsencrypt
+            - ./data/certbot/www:/var/www/certbot
+        command: "/bin/sh -c 'while :; do sleep 6h & wait $${!}; nginx -s reload; done & nginx -g \"daemon off;\"'"
+        networks:
+            - t_laravel
+
+    # db mysql
+    t_mysql:
+        container_name: t_mysql
+        image: mysql:8.0.30
+        restart: unless-stopped
+        environment: 
+            MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+            MYSQL_PASSWORD: ${DB_PASSWORD}
+            MYSQL_USER: ${DB_USERNAME}
+            TZ: America/Sao_Paulo
+        logging:
+            driver: "json-file"
+            options:
+                max-size: "10m"
+                max-file: "3"    
+        volumes:
+            - ./.docker/mysql/dbdata:/var/lib/mysql:rw
+            - ./docker/mysql/init:/docker-entrypoint-initdb.d/:rw
+            - ./docker/mysql/${MYSQL_CONF}:/etc/my.cnf
+        ports: 
+            - "3306:3306"
+        networks: 
+            - t_laravel
+
+    t_phpmyadmin:
+        depends_on: 
+            - t_mysql
+        image: phpmyadmin/phpmyadmin
+        container_name: t_phpmyadmin
+        restart: on-failure
+        ports:
+            - "7770:80"
+        logging:
+            driver: "json-file"
+            options:
+                max-size: "10m"
+                max-file: "3"
+        environment:
+            PMA_HOST: ${DB_HOST}
+            PMA_PORT: 3306
+            MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+            UPLOAD_LIMIT: 2048M
+        networks:
+            - t_laravel
+
+    #certbot
+    t_certbot:
+        container_name: t_certbot
+        image: certbot/certbot
+        logging:
+            driver: "json-file"
+            options:
+                max-size: "10m"
+                max-file: "3"
+        volumes:
+            - ./data/certbot/conf:/etc/letsencrypt
+            - ./data/certbot/www:/var/www/certbot
+        entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done;'"
+
+    #queue
+    t_supervisor:
+        build:
+            context: .
+            args:
+                USER: ${SYS_USER}
+                UID: ${SYS_UID}
+            dockerfile: ./docker/supervisor/Dockerfile
+        container_name: t_supervisor
+        restart: unless-stopped
+        environment:
+            APP_ROOT: ${APP_ROOT}
+            QUEUE_DRIVER: ${QUEUE_CONNECTION}
+            OPTIONS: ${QUEUE_OPTIONS}
+            DB_CONNECTION: ${DB_CONNECTION}
+            DB_HOST: ${DB_HOST}
+            DB_DATABASE: ${DB_DATABASE}
+            DB_USERNAME: ${DB_USERNAME}
+            DB_PASSWORD: ${DB_PASSWORD}
+        logging:
+            driver: "json-file"
+            options:
+                max-size: "10m"
+                max-file: "3"
+        volumes:
+            - ./:/var/www
+            - ./docker/supervisor/supervisor.conf:/etc/supervisor/supervisord.conf
+        networks:
+            - t_laravel
+
+    # redis
+    t_redis:
+        container_name: t_redis
+        image: redis:latest
+        restart: on-failure
+        command: /bin/sh -c "redis-server --requirepass $$REDIS_PASSWORD"
+        logging:
+            driver: "json-file"
+            options:
+                max-size: "10m"
+                max-file: "3"
+        volumes:
+            - ./redis.conf:/usr/local/etc/redis/redis.conf
+        ports:
+            - "6379:6379"
+        env_file:
+            - .env
+        networks: 
+            - t_laravel
+
+networks: 
+    t_laravel:
+        driver: bridge

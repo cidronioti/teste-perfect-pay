@@ -35,4 +35,9 @@ return [
         ],
     ],
 
+    'saas' => [
+        'api_key' => env('SAAS_API_KEY'),
+        'base_url' => env('SAAS_BASE_URL')
+    ]
+
 ];
